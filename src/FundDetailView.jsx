@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { ArrowLeft, ArrowUpRight, ArrowDownRight, Tag, Layers, RefreshCw } from 'lucide-react';
 import MFChart from './MFChart';
+import FundAnalysisCard from './FundAnalysisCard';
 
 const TIMEFRAMES_MAP = {
   '1M': 30,
@@ -48,10 +49,10 @@ export default function FundDetailView({ fund, fundDataState, onBack, onRefresh 
     const reversed = [...data].reverse();
     for (const item of reversed) {
       if (!item.date || item.nav == null) continue;
-      const iso = parseDateToISO(item.date);
+      const isoTime = parseDateToISO(item.date);
       const val = parseFloat(item.nav);
-      if (!isNaN(val) && iso) {
-        map.set(iso, { time: iso, value: val });
+      if (!isNaN(val) && isoTime) {
+        map.set(isoTime, { time: isoTime, value: val });
       }
     }
     return Array.from(map.values()).sort((a, b) => a.time.localeCompare(b.time));
@@ -206,6 +207,12 @@ export default function FundDetailView({ fund, fundDataState, onBack, onRefresh 
               setActiveRange={setActiveRange}
             />
           </div>
+
+          {/* Quantitative Valuation & Action Analysis Card below the graph */}
+          <FundAnalysisCard
+            data={data}
+            fundName={meta.scheme_name || fund.name}
+          />
         </div>
       )}
     </div>

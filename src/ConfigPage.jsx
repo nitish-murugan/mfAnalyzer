@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, Trash2, Globe, Link2, ExternalLink, RefreshCw, CheckCircle2, AlertCircle, FileText } from 'lucide-react';
 
-export default function ConfigPage({ funds, onAddFund, onDeleteFund, onResetDefaults }) {
+export default function ConfigPage({ funds, onAddFund, onDeleteFund }) {
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [latestUrl, setLatestUrl] = useState('');
@@ -54,7 +54,7 @@ export default function ConfigPage({ funds, onAddFund, onDeleteFund, onResetDefa
       <div className="config-header">
         <h1 className="config-title">Mutual Fund URL Configuration</h1>
         <p className="config-subtitle">
-          Add any number of Mutual Funds by entering their Base API URL and Latest NAV URL. All configured funds will automatically appear on the Home page.
+          Add any Mutual Fund by entering its Base API URL and Latest NAV URL. All configured funds will appear on your Home page.
         </p>
       </div>
 
@@ -77,7 +77,7 @@ export default function ConfigPage({ funds, onAddFund, onDeleteFund, onResetDefa
                   id="fund-name-input"
                   type="text"
                   className="styled-input"
-                  placeholder="e.g. HDFC Mid Cap Direct Plan (Optional)"
+                  placeholder="Enter mutual fund name (Optional)"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
@@ -95,7 +95,7 @@ export default function ConfigPage({ funds, onAddFund, onDeleteFund, onResetDefa
                   type="url"
                   required
                   className="styled-input font-mono"
-                  placeholder="https://api.mfapi.in/mf/118989"
+                  placeholder="https://api.mfapi.in/mf/<scheme_code>"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                 />
@@ -115,7 +115,7 @@ export default function ConfigPage({ funds, onAddFund, onDeleteFund, onResetDefa
                   id="latest-url-input"
                   type="url"
                   className="styled-input font-mono"
-                  placeholder="https://api.mfapi.in/mf/118989/latest"
+                  placeholder="https://api.mfapi.in/mf/<scheme_code>/latest"
                   value={latestUrl}
                   onChange={(e) => setLatestUrl(e.target.value)}
                 />
@@ -155,16 +155,11 @@ export default function ConfigPage({ funds, onAddFund, onDeleteFund, onResetDefa
       <div className="config-card">
         <div className="card-title-row">
           <h2 className="section-title">Configured Mutual Funds ({funds.length})</h2>
-          {funds.length > 0 && (
-            <button className="reset-link-btn" onClick={onResetDefaults}>
-              Reset Sample Funds
-            </button>
-          )}
         </div>
 
         {funds.length === 0 ? (
           <div className="empty-funds-notice">
-            <p>No funds configured yet. Use the form above to add your first mutual fund URL.</p>
+            <p>No mutual funds added yet. Use the form above to add your mutual fund URLs.</p>
           </div>
         ) : (
           <div className="funds-table-wrap">

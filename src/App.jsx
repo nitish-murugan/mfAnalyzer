@@ -1,25 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
+
 import Sidebar from './Sidebar';
 import HomePage from './HomePage';
 import ConfigPage from './ConfigPage';
 import FundDetailView from './FundDetailView';
-import { Menu, TrendingUp, RefreshCw, Home, Settings, Layers } from 'lucide-react';
-import './App.css';
+import AuthPage from './AuthPage';
 
-const DEFAULT_FUNDS = [
-  {
-    id: 'fund_hdfc_midcap',
-    name: 'HDFC Mid Cap Fund - Direct Plan - Growth Option',
-    baseUrl: 'https://api.mfapi.in/mf/118989',
-    latestUrl: 'https://api.mfapi.in/mf/118989/latest',
-  },
-  {
-    id: 'fund_parag_parikh',
-    name: 'Parag Parikh Flexi Cap Fund - Direct Plan - Growth',
-    baseUrl: 'https://api.mfapi.in/mf/122639',
-    latestUrl: 'https://api.mfapi.in/mf/122639/latest',
-  },
-];
+import { Menu, TrendingUp, RefreshCw, Home, Settings, Layers, LogOut } from 'lucide-react';
+import './App.css';
 
 function getTodayString() {
   const now = new Date();
@@ -30,42 +21,90 @@ function getTodayString() {
 }
 
 export default function App() {
+  // Firebase Auth State
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // App Navigation State
   const [currentView, setCurrentView] = useState('home'); // 'home' | 'config' | 'detail'
   const [selectedFundId, setSelectedFundId] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const [lastRefreshedDate, setLastRefreshedDate] = useState(() => {
-    return localStorage.getItem('mf_last_refreshed_date') || null;
-  });
+  // Funds stored in Firebase Firestore (defaults to empty [])
+  const [funds, setFunds] = useState([]);
+  const [fundsLoading, setFundsLoading] = useState(false);
 
-  const [funds, setFunds] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mf_configured_funds');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch {
-      // fallback
-    }
-    return DEFAULT_FUNDS;
-  });
+  const [lastRefreshedDate, setLastRefreshedDate] = useState(null);
 
   // Map of fundId -> { loading, data, latestNavInfo, error }
-  const [fundDataMap, setFundDataMap] = useState(() => {
-    try {
-      const cached = localStorage.getItem('mf_cached_fund_data');
-      if (cached) {
-        return JSON.parse(cached);
-      }
-    } catch {
-      // fallback
-    }
-    return {};
-  });
+  const [fundDataMap, setFundDataMap] = useState({});
 
-  // Fetch individual fund data
+  // 1. Listen for Firebase Auth State Changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Fetch User Funds from Firebase Firestore when logged in (empty by default)
+  useEffect(() => {
+    if (!user) {
+      setFunds([]);
+      setFundDataMap({});
+      return;
+    }
+
+    let isMounted = true;
+    setFundsLoading(true);
+
+    async function loadUserFunds() {
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const snap = await getDoc(userDocRef);
+
+        if (snap.exists() && Array.isArray(snap.data().funds)) {
+          if (isMounted) {
+            setFunds(snap.data().funds);
+            if (snap.data().lastRefreshedDate) {
+              setLastRefreshedDate(snap.data().lastRefreshedDate);
+            }
+          }
+        } else {
+          // Initialize new user with empty funds list []
+          await setDoc(
+            userDocRef,
+            {
+              funds: [],
+              email: user.email,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+
+          if (isMounted) {
+            setFunds([]);
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore load notice:', err.message);
+        if (isMounted) {
+          setFunds([]);
+        }
+      } finally {
+        if (isMounted) setFundsLoading(false);
+      }
+    }
+
+    loadUserFunds();
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  // Fetch individual fund data from API
   const fetchSingleFundData = useCallback(async (fund) => {
     if (!fund?.baseUrl) return null;
 
@@ -96,9 +135,7 @@ export default function App() {
               };
             }
           }
-        } catch {
-          // Ignore latest nav fetch failure and fallback
-        }
+        } catch {}
       }
 
       if (!latestNavInfo && baseJson.data?.[0]) {
@@ -115,14 +152,7 @@ export default function App() {
         error: null,
       };
 
-      setFundDataMap((prev) => {
-        const next = { ...prev, [fund.id]: result };
-        try {
-          localStorage.setItem('mf_cached_fund_data', JSON.stringify(next));
-        } catch {}
-        return next;
-      });
-
+      setFundDataMap((prev) => ({ ...prev, [fund.id]: result }));
       return result;
     } catch (err) {
       const errResult = {
@@ -131,75 +161,115 @@ export default function App() {
         latestNavInfo: null,
         error: err.message || 'Failed to fetch',
       };
-      setFundDataMap((prev) => ({
-        ...prev,
-        [fund.id]: errResult,
-      }));
+      setFundDataMap((prev) => ({ ...prev, [fund.id]: errResult }));
       return errResult;
     }
   }, []);
 
-  // Fetch all funds and update daily refresh marker
+  // Fetch all funds and save refresh date to Firebase
   const fetchAllFunds = useCallback(async () => {
+    if (funds.length === 0) return;
     setIsRefreshing(true);
     const today = getTodayString();
 
     try {
       await Promise.all(funds.map((f) => fetchSingleFundData(f)));
       setLastRefreshedDate(today);
-      localStorage.setItem('mf_last_refreshed_date', today);
+
+      if (user) {
+        try {
+          await setDoc(
+            doc(db, 'users', user.uid),
+            {
+              lastRefreshedDate: today,
+            },
+            { merge: true }
+          );
+        } catch (e) {
+          console.warn('Firebase sync date save:', e.message);
+        }
+      }
     } finally {
       setIsRefreshing(false);
     }
-  }, [funds, fetchSingleFundData]);
+  }, [funds, fetchSingleFundData, user]);
 
-  // DAILY AUTO-REFRESH CHECK
+  // Daily auto-refresh check
   const hasCheckedDailyRefresh = useRef(false);
   useEffect(() => {
+    if (!user || funds.length === 0) return;
     if (hasCheckedDailyRefresh.current) return;
     hasCheckedDailyRefresh.current = true;
 
     const today = getTodayString();
-    const storedLastDate = localStorage.getItem('mf_last_refreshed_date');
-
-    if (storedLastDate !== today || Object.keys(fundDataMap).length === 0) {
+    if (lastRefreshedDate !== today || Object.keys(fundDataMap).length === 0) {
       fetchAllFunds();
     }
-  }, [fetchAllFunds, fundDataMap]);
+  }, [user, funds, lastRefreshedDate, fetchAllFunds, fundDataMap]);
 
-  // Save funds list to localStorage
+  // When funds change, load data
   useEffect(() => {
-    try {
-      localStorage.setItem('mf_configured_funds', JSON.stringify(funds));
-    } catch {}
-  }, [funds]);
+    if (funds.length > 0) {
+      funds.forEach((f) => {
+        if (!fundDataMap[f.id]) {
+          fetchSingleFundData(f);
+        }
+      });
+    }
+  }, [funds, fetchSingleFundData]);
 
-  // Fund management callbacks
-  const handleAddFund = (newFund) => {
-    setFunds((prev) => [newFund, ...prev]);
+  // 3. Fund Management — Data stored in Firebase Firestore
+  const handleAddFund = async (newFund) => {
+    const updated = [newFund, ...funds];
+    setFunds(updated);
     fetchSingleFundData(newFund);
+
+    // Save directly to Firebase Firestore
+    if (user) {
+      try {
+        await setDoc(
+          doc(db, 'users', user.uid),
+          {
+            funds: updated,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Firebase save fund error:', err.message);
+      }
+    }
   };
 
-  const handleDeleteFund = (fundId) => {
-    setFunds((prev) => prev.filter((f) => f.id !== fundId));
+  const handleDeleteFund = async (fundId) => {
+    const updated = funds.filter((f) => f.id !== fundId);
+    setFunds(updated);
     setFundDataMap((prev) => {
       const copy = { ...prev };
       delete copy[fundId];
-      try {
-        localStorage.setItem('mf_cached_fund_data', JSON.stringify(copy));
-      } catch {}
       return copy;
     });
+
     if (selectedFundId === fundId) {
       setSelectedFundId(null);
       setCurrentView('home');
     }
-  };
 
-  const handleResetDefaults = () => {
-    setFunds(DEFAULT_FUNDS);
-    setCurrentView('home');
-    fetchAllFunds();
+    // Update in Firebase Firestore
+    if (user) {
+      try {
+        await setDoc(
+          doc(db, 'users', user.uid),
+          {
+            funds: updated,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Firebase delete fund error:', err.message);
+      }
+    }
   };
 
   const handleSelectFund = (fundId) => {
@@ -207,11 +277,38 @@ export default function App() {
     setCurrentView('detail');
   };
 
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch (e) {
+      console.error('Sign out error:', e);
+    }
+    setUser(null);
+    setFunds([]);
+    setFundDataMap({});
+    setCurrentView('home');
+  };
+
   const selectedFund = funds.find((f) => f.id === selectedFundId);
+
+  // Loading spinner while checking Firebase Auth
+  if (authLoading) {
+    return (
+      <div className="auth-loading-viewport">
+        <div className="auth-spinner large" />
+        <p>Connecting to Firebase...</p>
+      </div>
+    );
+  }
+
+  // Not logged in -> Show Login and Signup page
+  if (!user) {
+    return <AuthPage onAuthSuccess={(u) => setUser(u)} />;
+  }
 
   return (
     <div className="app-shell">
-      {/* Mobile Top Navbar (shown only on mobile/tablet) */}
+      {/* Mobile Top Navbar (shown on mobile/tablet) */}
       <header className="mobile-top-header">
         <button
           className="mobile-menu-btn"
@@ -225,17 +322,28 @@ export default function App() {
           <div className="mobile-logo">
             <TrendingUp size={16} />
           </div>
-          <span className="mobile-title">MF<strong>Analyze</strong></span>
+          <span className="mobile-title">
+            MF<strong>Analyze</strong>
+          </span>
         </div>
 
-        <button
-          className="mobile-refresh-btn"
-          onClick={fetchAllFunds}
-          disabled={isRefreshing}
-          title="Refresh data"
-        >
-          <RefreshCw size={16} className={isRefreshing ? 'spinner-icon' : ''} />
-        </button>
+        <div className="mobile-header-right">
+          <button
+            className="mobile-refresh-btn"
+            onClick={fetchAllFunds}
+            disabled={isRefreshing}
+            title="Refresh data"
+          >
+            <RefreshCw size={16} className={isRefreshing ? 'spinner-icon' : ''} />
+          </button>
+          <button
+            className="mobile-signout-btn"
+            onClick={handleSignOut}
+            title="Sign Out"
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
       </header>
 
       {/* Side Navbar (Desktop sticky, Mobile drawer) */}
@@ -253,36 +361,46 @@ export default function App() {
         onManualRefresh={fetchAllFunds}
         isMobileOpen={isMobileMenuOpen}
         setIsMobileOpen={setIsMobileMenuOpen}
+        user={user}
+        onSignOut={handleSignOut}
       />
 
       {/* Main Content Area */}
       <div className="main-viewport">
-        {currentView === 'home' && (
-          <HomePage
-            funds={funds}
-            fundDataMap={fundDataMap}
-            onSelectFund={handleSelectFund}
-            onGoToConfig={() => setCurrentView('config')}
-            onRefreshAll={fetchAllFunds}
-          />
-        )}
+        {fundsLoading ? (
+          <div className="funds-loading-box">
+            <div className="card-spinner" />
+            <p>Loading your mutual funds from Firebase...</p>
+          </div>
+        ) : (
+          <>
+            {currentView === 'home' && (
+              <HomePage
+                funds={funds}
+                fundDataMap={fundDataMap}
+                onSelectFund={handleSelectFund}
+                onGoToConfig={() => setCurrentView('config')}
+                onRefreshAll={fetchAllFunds}
+              />
+            )}
 
-        {currentView === 'config' && (
-          <ConfigPage
-            funds={funds}
-            onAddFund={handleAddFund}
-            onDeleteFund={handleDeleteFund}
-            onResetDefaults={handleResetDefaults}
-          />
-        )}
+            {currentView === 'config' && (
+              <ConfigPage
+                funds={funds}
+                onAddFund={handleAddFund}
+                onDeleteFund={handleDeleteFund}
+              />
+            )}
 
-        {currentView === 'detail' && selectedFund && (
-          <FundDetailView
-            fund={selectedFund}
-            fundDataState={fundDataMap[selectedFund.id]}
-            onBack={() => setCurrentView('home')}
-            onRefresh={() => fetchSingleFundData(selectedFund)}
-          />
+            {currentView === 'detail' && selectedFund && (
+              <FundDetailView
+                fund={selectedFund}
+                fundDataState={fundDataMap[selectedFund.id]}
+                onBack={() => setCurrentView('home')}
+                onRefresh={() => fetchSingleFundData(selectedFund)}
+              />
+            )}
+          </>
         )}
       </div>
 

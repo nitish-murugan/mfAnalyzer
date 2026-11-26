@@ -1,4 +1,15 @@
-import { Home, Settings, TrendingUp, PlusCircle, ChevronRight, CheckCircle2, RefreshCw, X } from 'lucide-react';
+import {
+  Home,
+  Settings,
+  TrendingUp,
+  PlusCircle,
+  ChevronRight,
+  CheckCircle2,
+  RefreshCw,
+  X,
+  LogOut,
+  User,
+} from 'lucide-react';
 
 export default function Sidebar({
   currentView,
@@ -11,6 +22,8 @@ export default function Sidebar({
   onManualRefresh,
   isMobileOpen,
   setIsMobileOpen,
+  user,
+  onSignOut,
 }) {
   const isRefreshedToday = (() => {
     const now = new Date();
@@ -30,6 +43,9 @@ export default function Sidebar({
     onSelectFund(fundId);
     if (setIsMobileOpen) setIsMobileOpen(false);
   };
+
+  const displayName = user?.displayName || user?.email?.split('@')[0] || 'Investor';
+  const initial = displayName.charAt(0).toUpperCase();
 
   return (
     <>
@@ -91,7 +107,7 @@ export default function Sidebar({
           </div>
           {lastRefreshedDate && (
             <div className="daily-status-date">
-              Last sync: {lastRefreshedDate}
+              Firebase sync: {lastRefreshedDate}
             </div>
           )}
         </div>
@@ -151,6 +167,26 @@ export default function Sidebar({
             )}
           </div>
         </div>
+
+        {/* User Profile & Sign Out Bar at bottom */}
+        {user && (
+          <div className="sidebar-user-footer">
+            <div className="user-profile-badge">
+              <div className="user-avatar-circle">{initial}</div>
+              <div className="user-info-text">
+                <span className="user-display-name">{displayName}</span>
+                <span className="user-email-text" title={user.email}>{user.email}</span>
+              </div>
+            </div>
+            <button
+              className="sign-out-btn"
+              onClick={onSignOut}
+              title="Sign out of Firebase"
+            >
+              <LogOut size={15} />
+            </button>
+          </div>
+        )}
       </aside>
     </>
   );
